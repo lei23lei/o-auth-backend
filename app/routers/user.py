@@ -1,0 +1,95 @@
+from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
+from app.schemas.user import User, UserCreate, UserResponse
+from app.schemas.error import ErrorResponse, ErrorDetail, BaseResponse
+from app.models.user import User as UserModel
+from app.database import get_db
+from app.utils.jwt import get_password_hash
+
+router = APIRouter(tags=["user"])
+
+@router.get("/", response_model=BaseResponse)
+async def get_users():
+    return BaseResponse(
+        success=True,
+        message="Hello User",
+        data=None
+    )
+
+@router.post("/", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+async def create_user(user: UserCreate, db: Session = Depends(get_db)):
+    try:
+        # Check if user already exists
+        existing_user = db.query(UserModel).filter(UserModel.email == user.email).first()
+        if existing_user:
+            error_response = ErrorResponse(
+                message="Email already registered",
+                errors=[ErrorDetail(field="email", message="This email is already in use", code="EMAIL_EXISTS")]
+            )
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content=error_response.dict()
+            )
+        
+        # Create new user with hashed password
+        db_user = UserModel(
+            email=user.email, 
+            password=get_password_hash(user.password),
+            image=None,
+            name=None
+        )
+        db.add(db_user)
+        db.commit()
+        db.refresh(db_user)
+        
+        # Convert SQLAlchemy model to Pydantic model
+        user_data = User(
+            id=db_user.id,
+            email=db_user.email,
+            password=db_user.password,
+            image=db_user.image,
+            name=db_user.name,
+            created_at=db_user.created_at,
+            updated_at=db_user.updated_at
+        )
+        
+        # Return consistent success response
+        success_response = UserResponse(
+            message="User created successfully",
+            data=user_data
+        )
+        return success_response
+        
+    except IntegrityError as e:
+        db.rollback()
+        if "unique constraint" in str(e).lower():
+            error_response = ErrorResponse(
+                message="Email already registered",
+                errors=[ErrorDetail(field="email", message="This email is already in use", code="EMAIL_EXISTS")]
+            )
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content=error_response.dict()
+            )
+        error_response = ErrorResponse(
+            message="Database integrity error",
+            errors=[ErrorDetail(message="A database constraint was violated", code="DB_INTEGRITY_ERROR")]
+        )
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content=error_response.dict()
+        )
+    except Exception as e:
+        db.rollback()
+        error_response = ErrorResponse(
+            message="An error occurred while creating user",
+            errors=[ErrorDetail(message=str(e), code="INTERNAL_ERROR")]
+        )
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content=error_response.dict()
+        )
+        
+        
