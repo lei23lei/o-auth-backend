@@ -38,7 +38,10 @@ async def create_user(user: UserCreate, db: Session = Depends(get_db)):
             email=user.email, 
             password=get_password_hash(user.password),
             image=None,
-            name=None
+            name=None,
+            provider="email",  # Explicitly set provider for email registration
+            provider_id=None,  # No provider ID for email users
+            username=None      # No username for email users
         )
         db.add(db_user)
         db.commit()
@@ -51,6 +54,9 @@ async def create_user(user: UserCreate, db: Session = Depends(get_db)):
             password=db_user.password,
             image=db_user.image,
             name=db_user.name,
+            provider=db_user.provider,
+            provider_id=db_user.provider_id,
+            username=db_user.username,
             created_at=db_user.created_at,
             updated_at=db_user.updated_at
         )

@@ -22,8 +22,11 @@ class User(BaseModel):
     id: uuid.UUID
     image: Optional[str] = None
     email: str
-    password: str
+    password: Optional[str] = None  # OAuth users don't have passwords
     name: Optional[str] = None
+    provider: str = "email"  # Default to email, can be google, github, etc.
+    provider_id: Optional[str] = None  # GitHub user ID or other OAuth provider ID
+    username: Optional[str] = None  # GitHub username or other provider username
     created_at: datetime
     updated_at: datetime
 

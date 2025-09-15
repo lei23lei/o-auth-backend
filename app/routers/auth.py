@@ -61,13 +61,36 @@ async def login(login_data: LoginRequest, db: Session = Depends(get_db)):
         # Find user by email
         user = db.query(UserModel).filter(UserModel.email == login_data.email).first()
         
-        if not user or not verify_password(login_data.password, user.password):
+        if not user:
             error_response = ErrorResponse(
                 message="Invalid credentials",
                 errors=[ErrorDetail(field="email", message="Invalid email or password", code="INVALID_CREDENTIALS")]
             )
             return JSONResponse(
                 status_code=status.HTTP_401_UNAUTHORIZED,
+                content=error_response.dict()
+            )
+        
+        # Check if user has a password (email registration) or is OAuth user
+        if user.provider == "email":
+            # For email users, verify password
+            if not user.password or not verify_password(login_data.password, user.password):
+                error_response = ErrorResponse(
+                    message="Invalid credentials",
+                    errors=[ErrorDetail(field="email", message="Invalid email or password", code="INVALID_CREDENTIALS")]
+                )
+                return JSONResponse(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    content=error_response.dict()
+                )
+        else:
+            # For OAuth users (github, google, etc.), they shouldn't use password login
+            error_response = ErrorResponse(
+                message="OAuth login required",
+                errors=[ErrorDetail(field="email", message=f"Please use {user.provider} login instead of password", code="OAUTH_REQUIRED")]
+            )
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
                 content=error_response.dict()
             )
         
@@ -113,6 +136,9 @@ async def get_current_user_info(current_user: UserModel = Depends(get_current_us
             password=current_user.password,
             image=current_user.image,
             name=current_user.name,
+            provider=current_user.provider,
+            provider_id=current_user.provider_id,
+            username=current_user.username,
             created_at=current_user.created_at,
             updated_at=current_user.updated_at
         )
@@ -293,6 +319,79 @@ async def reset_password(request: ResetPasswordRequest, db: Session = Depends(ge
         error_response = ErrorResponse(
             message="Failed to reset password",
             errors=[ErrorDetail(message="An error occurred while resetting your password", code="RESET_ERROR")]
+        )
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content=error_response.dict()
+        )
+
+@router.post("/oauth-user", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+async def create_oauth_user(
+    email: str,
+    name: str = None,
+    image: str = None,
+    provider: str = "github",  # Default to github for NextAuth.js
+    provider_id: str = None,
+    username: str = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Create or update OAuth user (called by NextAuth.js or OAuth callbacks)
+    """
+    try:
+        # Check if user already exists
+        existing_user = db.query(UserModel).filter(UserModel.email == email).first()
+        
+        if existing_user:
+            # Update existing user with OAuth info
+            existing_user.name = name or existing_user.name
+            existing_user.image = image or existing_user.image
+            existing_user.provider = provider
+            existing_user.provider_id = provider_id or existing_user.provider_id
+            existing_user.username = username or existing_user.username
+            existing_user.updated_at = datetime.utcnow()
+            db.commit()
+            db.refresh(existing_user)
+            user = existing_user
+        else:
+            # Create new OAuth user (no password)
+            user = UserModel(
+                email=email,
+                password=None,  # OAuth users don't have passwords
+                name=name,
+                image=image,
+                provider=provider,
+                provider_id=provider_id,
+                username=username
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+        
+        # Convert to response format
+        user_data = User(
+            id=user.id,
+            email=user.email,
+            password=user.password,
+            image=user.image,
+            name=user.name,
+            provider=user.provider,
+            provider_id=user.provider_id,
+            username=user.username,
+            created_at=user.created_at,
+            updated_at=user.updated_at
+        )
+        
+        return UserResponse(
+            message="OAuth user created/updated successfully",
+            data=user_data
+        )
+        
+    except Exception as e:
+        db.rollback()
+        error_response = ErrorResponse(
+            message="Failed to create/update OAuth user",
+            errors=[ErrorDetail(message=str(e), code="OAUTH_USER_ERROR")]
         )
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
