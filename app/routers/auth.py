@@ -397,3 +397,120 @@ async def create_oauth_user(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content=error_response.dict()
         )
+
+@router.post("/nextauth-callback", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+async def nextauth_callback(
+    email: str,
+    name: str = None,
+    image: str = None,
+    provider: str = "github",
+    provider_id: str = None,
+    username: str = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Handle NextAuth.js callback - create or update user from GitHub OAuth
+    This endpoint is called by your Next.js frontend after successful GitHub login
+    """
+    try:
+        # Check if user already exists with this email
+        existing_user = db.query(UserModel).filter(UserModel.email == email).first()
+        
+        if existing_user:
+            # Handle cross-provider email conflicts
+            if existing_user.provider != provider:
+                # User exists with different provider (e.g., email vs github)
+                if existing_user.provider == "email" and provider == "github":
+                    # User has email account, now logging in with GitHub
+                    # Merge accounts: keep email account but add GitHub info
+                    existing_user.name = name or existing_user.name
+                    existing_user.image = image or existing_user.image
+                    existing_user.provider = "github"  # Switch to GitHub as primary
+                    existing_user.provider_id = provider_id
+                    existing_user.username = username
+                    existing_user.updated_at = datetime.utcnow()
+                    db.commit()
+                    db.refresh(existing_user)
+                    user = existing_user
+                elif existing_user.provider == "github" and provider == "email":
+                    # User has GitHub account, trying to create email account
+                    error_response = ErrorResponse(
+                        message="Account already exists with GitHub",
+                        errors=[ErrorDetail(
+                            field="email", 
+                            message="An account with this email already exists using GitHub login. Please use GitHub to sign in.", 
+                            code="ACCOUNT_EXISTS_GITHUB"
+                        )]
+                    )
+                    return JSONResponse(
+                        status_code=status.HTTP_409_CONFLICT,
+                        content=error_response.dict()
+                    )
+                else:
+                    # Other provider conflicts (e.g., google vs github)
+                    error_response = ErrorResponse(
+                        message="Account already exists with different provider",
+                        errors=[ErrorDetail(
+                            field="email", 
+                            message=f"An account with this email already exists using {existing_user.provider} login.", 
+                            code="ACCOUNT_EXISTS_DIFFERENT_PROVIDER"
+                        )]
+                    )
+                    return JSONResponse(
+                        status_code=status.HTTP_409_CONFLICT,
+                        content=error_response.dict()
+                    )
+            else:
+                # Same provider, update existing user info
+                existing_user.name = name or existing_user.name
+                existing_user.image = image or existing_user.image
+                existing_user.provider_id = provider_id or existing_user.provider_id
+                existing_user.username = username or existing_user.username
+                existing_user.updated_at = datetime.utcnow()
+                db.commit()
+                db.refresh(existing_user)
+                user = existing_user
+        else:
+            # Create new OAuth user (no password)
+            user = UserModel(
+                email=email,
+                password=None,  # OAuth users don't have passwords
+                name=name,
+                image=image,
+                provider=provider,
+                provider_id=provider_id,
+                username=username
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+        
+        # Convert to response format
+        user_data = User(
+            id=user.id,
+            email=user.email,
+            password=user.password,
+            image=user.image,
+            name=user.name,
+            provider=user.provider,
+            provider_id=user.provider_id,
+            username=user.username,
+            created_at=user.created_at,
+            updated_at=user.updated_at
+        )
+        
+        return UserResponse(
+            message="NextAuth user created/updated successfully",
+            data=user_data
+        )
+        
+    except Exception as e:
+        db.rollback()
+        error_response = ErrorResponse(
+            message="Failed to create/update NextAuth user",
+            errors=[ErrorDetail(message=str(e), code="NEXTAUTH_USER_ERROR")]
+        )
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content=error_response.dict()
+        )

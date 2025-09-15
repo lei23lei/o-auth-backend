@@ -24,14 +24,31 @@ async def create_user(user: UserCreate, db: Session = Depends(get_db)):
         # Check if user already exists
         existing_user = db.query(UserModel).filter(UserModel.email == user.email).first()
         if existing_user:
-            error_response = ErrorResponse(
-                message="Email already registered",
-                errors=[ErrorDetail(field="email", message="This email is already in use", code="EMAIL_EXISTS")]
-            )
-            return JSONResponse(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                content=error_response.dict()
-            )
+            # Handle cross-provider email conflicts
+            if existing_user.provider != "email":
+                # User exists with OAuth provider (e.g., GitHub)
+                error_response = ErrorResponse(
+                    message="Account already exists with OAuth provider",
+                    errors=[ErrorDetail(
+                        field="email", 
+                        message=f"An account with this email already exists using {existing_user.provider} login. Please use {existing_user.provider} to sign in.", 
+                        code="ACCOUNT_EXISTS_OAUTH"
+                    )]
+                )
+                return JSONResponse(
+                    status_code=status.HTTP_409_CONFLICT,
+                    content=error_response.dict()
+                )
+            else:
+                # User already has email account
+                error_response = ErrorResponse(
+                    message="Email already registered",
+                    errors=[ErrorDetail(field="email", message="This email is already in use", code="EMAIL_EXISTS")]
+                )
+                return JSONResponse(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    content=error_response.dict()
+                )
         
         # Create new user with hashed password
         db_user = UserModel(
