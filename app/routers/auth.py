@@ -4,7 +4,8 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from app.schemas.auth import (
     LoginRequest, TokenResponse, TokenData, 
-    ForgotPasswordRequest, ResetPasswordRequest, PasswordResetResponse
+    ForgotPasswordRequest, ResetPasswordRequest, PasswordResetResponse,
+    NextAuthCallbackResponse
 )
 from app.schemas.user import User, UserResponse
 from app.schemas.error import ErrorResponse, ErrorDetail
@@ -170,6 +171,16 @@ async def forgot_password(request: ForgotPasswordRequest, db: Session = Depends(
         print(user)
         if not user:
             # For security, return success even if email doesn't exist
+            # This prevents email enumeration attacks
+            return PasswordResetResponse(
+                success=True,
+                message="Password reset email sent if account exists."
+            )
+        
+        # Check if user has email provider (can reset password)
+        if user.provider != "email":
+            # User exists but uses OAuth (GitHub, Google, etc.)
+            # For security, return success even if user uses OAuth
             # This prevents email enumeration attacks
             return PasswordResetResponse(
                 success=True,
@@ -398,7 +409,7 @@ async def create_oauth_user(
             content=error_response.dict()
         )
 
-@router.post("/nextauth-callback", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/nextauth-callback", response_model=NextAuthCallbackResponse, status_code=status.HTTP_201_CREATED)
 async def nextauth_callback(
     email: str,
     name: str = None,
@@ -499,9 +510,27 @@ async def nextauth_callback(
             updated_at=user.updated_at
         )
         
-        return UserResponse(
+        # Create JWT token for the user
+        access_token_expires = timedelta(minutes=30)
+        access_token = create_access_token(
+            data={"sub": str(user.id), "email": user.email},
+            expires_delta=access_token_expires
+        )
+        
+        # Create token data
+        token_data = TokenData(
+            access_token=access_token,
+            expires_in=1800,  # 30 minutes in seconds
+            user_id=str(user.id),
+            email=user.email
+        )
+        
+        return NextAuthCallbackResponse(
             message="NextAuth user created/updated successfully",
-            data=user_data
+            data={
+                "user": user_data,
+                "token": token_data
+            }
         )
         
     except Exception as e:

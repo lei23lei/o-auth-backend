@@ -42,3 +42,9 @@ class PasswordResetResponse(BaseModel):
     message: str
     data: Optional[dict] = None
     errors: Optional[list] = None
+
+class NextAuthCallbackResponse(BaseModel):
+    success: bool = True
+    message: str
+    data: dict  # Will contain both user and token
+    errors: Optional[list] = None
